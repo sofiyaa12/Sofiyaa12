@@ -37,11 +37,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       if (order.status === 'COMPLETED') return res.status(200).send('already-processed');
 
-      await prisma.$transaction(
-        order.items.map((it) =>
+      // finalize: decrement inventory and remove reservations associated with this order
+      const tx = [] as any[];
+      for (const it of order.items) {
+        tx.push(
           prisma.variant.updateMany({ where: { id: it.variantId, inventory: { gte: it.quantity } }, data: { inventory: { decrement: it.quantity } } })
-        )
-      );
+        );
+      }
+      // delete reservations for this order
+      tx.push(prisma.reservation.deleteMany({ where: { orderId: order.id } }));
+
+      await prisma.$transaction(tx);
 
       await prisma.order.update({ where: { id: order.id }, data: { status: 'COMPLETED', reference } });
       return res.status(200).send('processed');

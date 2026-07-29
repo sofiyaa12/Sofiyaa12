@@ -18,15 +18,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (verifyResp.data.status === 'success') {
       if (order.status !== 'COMPLETED') {
-        await prisma.$transaction(
-          order.items.map((it) =>
-            prisma.variant.updateMany({ where: { id: it.variantId, inventory: { gte: it.quantity } }, data: { inventory: { decrement: it.quantity } } })
-          )
+        // decrement inventory and remove reservations in a transaction
+        const tx = order.items.map((it) =>
+          prisma.variant.updateMany({ where: { id: it.variantId, inventory: { gte: it.quantity } }, data: { inventory: { decrement: it.quantity } } })
         );
+        tx.push(prisma.reservation.deleteMany({ where: { orderId: order.id } }));
+        await prisma.$transaction(tx);
         await prisma.order.update({ where: { id: order.id }, data: { status: 'COMPLETED', reference } });
       }
       return res.redirect('/success');
     } else {
+      // payment failed — release reservations
+      await prisma.reservation.deleteMany({ where: { orderId: order.id } });
       await prisma.order.update({ where: { id: order.id }, data: { status: 'FAILED' } });
       return res.redirect('/cart?payment=failed');
     }
